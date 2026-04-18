@@ -1,0 +1,33 @@
+# Node
+/node_modules
+.pnpm-store
+
+# Env (QUAN TRỌNG)
+/.env
+.env.local
+
+# Next.js
+.next
+out
+
+# Hardhat
+/artifacts
+/cache
+/coverage
+/typechain
+
+# Build
+/dist
+/build
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea

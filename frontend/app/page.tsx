@@ -9,12 +9,14 @@ export default function Home() {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const SEPOLIA_CHAIN_ID = BigInt(11155111);
   const [account, setAccount] = useState("");
+  const [campaignName, setCampaignName] = useState("");
   const [campaignGoalEth, setCampaignGoalEth] = useState("0.1");
   const [campaignDurationDays, setCampaignDurationDays] = useState("7");
   const [campaigns, setCampaigns] = useState<
     {
       id: number;
       creator: string;
+      name: string;
       goal: bigint;
       pledged: bigint;
       deadline: bigint;
@@ -32,6 +34,7 @@ export default function Home() {
   const [selectedCampaign, setSelectedCampaign] = useState<{
     id: number;
     creator: string;
+    name: string;
     goal: bigint;
     pledged: bigint;
     deadline: bigint;
@@ -64,17 +67,7 @@ export default function Home() {
   >([]);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [minGoalEth, setMinGoalEth] = useState("");
-  const [maxGoalEth, setMaxGoalEth] = useState("");
-  const [minDaysLeft, setMinDaysLeft] = useState("");
-  const [maxDaysLeft, setMaxDaysLeft] = useState("");
-  const [minRemainingPct, setMinRemainingPct] = useState("");
-  const [maxRemainingPct, setMaxRemainingPct] = useState("");
-  const [sortBy, setSortBy] = useState("deadline");
-  const [sortDir, setSortDir] = useState("asc");
-  const [showFilters, setShowFilters] = useState(false);
   const [activeDetailTab, setActiveDetailTab] = useState("contributors");
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [favoriteIds, setFavoriteIds] = useState<number[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 6;
@@ -93,6 +86,8 @@ export default function Home() {
       label: string;
     }[]
   >([]);
+  const [openCampaignCount, setOpenCampaignCount] = useState(0);
+  const [refundedCampaignIds, setRefundedCampaignIds] = useState<number[]>([]);
   const explorerBase = "https://sepolia.etherscan.io/tx/";
 
   const showToast = useCallback(
@@ -117,7 +112,10 @@ export default function Home() {
         setNetworkWarning(
           `Sai network. Hãy chọn Sepolia (chainId ${chainId}).`,
         );
-        showToast("error", "Network hiện tại không đúng. Vui lòng chuyển sang Sepolia.");
+        showToast(
+          "error",
+          "Network hiện tại không đúng. Vui lòng chuyển sang Sepolia.",
+        );
         return null;
       }
 
@@ -153,6 +151,44 @@ export default function Home() {
       return address;
     }
     return `${address.slice(0, head)}...${address.slice(-tail)}`;
+  }
+
+  function normalizeEthInput(value: string, maxDecimals: number) {
+    if (value === "") {
+      return value;
+    }
+    if (!/^\d*(\.\d*)?$/.test(value)) {
+      return null;
+    }
+    const parts = value.split(".");
+    if (parts.length === 2 && parts[1].length > maxDecimals) {
+      return null;
+    }
+    return value;
+  }
+
+  function isValidEthAmount(value: string, maxDecimals: number) {
+    if (!value) {
+      return false;
+    }
+    if (!/^\d+(\.\d+)?$/.test(value)) {
+      return false;
+    }
+    const parts = value.split(".");
+    if (parts.length === 2 && parts[1].length > maxDecimals) {
+      return false;
+    }
+    return Number(value) > 0;
+  }
+
+  function getErrorMessage(error: unknown) {
+    if (error && typeof error === "object" && "message" in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === "string") {
+        return message;
+      }
+    }
+    return "";
   }
 
   // 🔗 connect ví
@@ -199,6 +235,7 @@ export default function Home() {
           items.push({
             id,
             creator: campaign.creator,
+            name: campaign.name,
             goal: campaign.goal,
             pledged: campaign.pledged,
             deadline: campaign.deadline,
@@ -208,6 +245,30 @@ export default function Home() {
         }
 
         setCampaigns(items);
+        if (account) {
+          const openCount = await contract.openCampaignCount(account);
+          setOpenCampaignCount(Number(openCount));
+          const refundedFilter = contract.filters.Refunded(null, account);
+          const refundedLogs = await contract.queryFilter(
+            refundedFilter,
+            0,
+            "latest",
+          );
+          const refundedIds = refundedLogs
+            .map((log) => {
+              const parsed = contract.interface.parseLog(log);
+              if (!parsed) {
+                return null;
+              }
+              const args = parsed.args as unknown as { id: bigint };
+              return Number(args.id);
+            })
+            .filter((value): value is number => value !== null);
+          setRefundedCampaignIds(Array.from(new Set(refundedIds)));
+        } else {
+          setOpenCampaignCount(0);
+          setRefundedCampaignIds([]);
+        }
       } finally {
         setIsLoadingCampaigns(false);
       }
@@ -236,17 +297,26 @@ export default function Home() {
       updateTx(tx.hash, "success");
       setTxStatus("success");
       showToast("success", "Bạn đã góp vốn thành công!");
-    } catch {
+    } catch (error) {
+      const details = getErrorMessage(error);
       setTxStatus("error");
-      showToast("error", "Góp vốn chưa thành công, vui lòng thử lại.");
+      showToast(
+        "error",
+        details
+          ? `Góp vốn chưa thành công: ${details}`
+          : "Góp vốn chưa thành công, vui lòng thử lại.",
+      );
       return;
     }
   }
 
   async function pledgeToCampaign(id: number) {
     const amount = pledgeAmounts[id] ?? "";
-    if (!amount || Number(amount) <= 0) {
-      showToast("error", "Vui lòng nhập số ETH bạn muốn góp.");
+    if (!isValidEthAmount(amount, 6)) {
+      showToast(
+        "error",
+        "Vui lòng nhập số ETH hợp lệ (tối đa 6 số thập phân).",
+      );
       return;
     }
 
@@ -269,9 +339,15 @@ export default function Home() {
       updateTx(tx.hash, "success");
       setTxStatus("success");
       showToast("success", "Bạn đã góp vốn thành công!");
-    } catch {
+    } catch (error) {
+      const details = getErrorMessage(error);
       setTxStatus("error");
-      showToast("error", "Góp vốn chưa thành công, vui lòng thử lại.");
+      showToast(
+        "error",
+        details
+          ? `Góp vốn chưa thành công: ${details}`
+          : "Góp vốn chưa thành công, vui lòng thử lại.",
+      );
       return;
     }
 
@@ -299,9 +375,15 @@ export default function Home() {
       updateTx(tx.hash, "success");
       setTxStatus("success");
       showToast("success", "Rút tiền thành công!");
-    } catch {
+    } catch (error) {
+      const details = getErrorMessage(error);
       setTxStatus("error");
-      showToast("error", "Rút tiền thất bại. Vui lòng thử lại.");
+      showToast(
+        "error",
+        details
+          ? `Rút tiền thất bại: ${details}`
+          : "Rút tiền thất bại. Vui lòng thử lại.",
+      );
       return;
     }
 
@@ -329,9 +411,18 @@ export default function Home() {
       updateTx(tx.hash, "success");
       setTxStatus("success");
       showToast("success", "Hoàn tiền thành công!");
-    } catch {
+      setRefundedCampaignIds((prev) =>
+        prev.includes(id) ? prev : [...prev, id],
+      );
+    } catch (error) {
+      const details = getErrorMessage(error);
       setTxStatus("error");
-      showToast("error", "Hoàn tiền thất bại. Vui lòng thử lại.");
+      showToast(
+        "error",
+        details
+          ? `Hoàn tiền thất bại: ${details}`
+          : "Hoàn tiền thất bại. Vui lòng thử lại.",
+      );
       return;
     }
 
@@ -343,8 +434,21 @@ export default function Home() {
 
   // 🧩 tạo campaign
   async function createCampaign() {
-    if (!campaignGoalEth || Number(campaignGoalEth) <= 0) {
-      showToast("error", "Mục tiêu phải lớn hơn 0 ETH!");
+    if (account && openCampaignCount >= 5) {
+      showToast(
+        "error",
+        "Bạn đã có 5 chiến dịch đang mở. Vui lòng kết thúc bớt trước khi tạo mới.",
+      );
+      return;
+    }
+    const trimmedName = campaignName.trim();
+    if (!trimmedName || trimmedName.length > 32) {
+      showToast("error", "Tên chiến dịch phải từ 1 đến 32 ký tự.");
+      return;
+    }
+
+    if (!isValidEthAmount(campaignGoalEth, 6)) {
+      showToast("error", "Mục tiêu phải hợp lệ (tối đa 6 số thập phân).");
       return;
     }
 
@@ -369,6 +473,7 @@ export default function Home() {
       setTxStatus("pending");
       showToast("info", "Đang tạo chiến dịch...");
       const tx = await contract.createCampaign(
+        trimmedName,
         ethers.parseEther(campaignGoalEth),
         durationSeconds,
       );
@@ -377,9 +482,16 @@ export default function Home() {
       updateTx(tx.hash, "success");
       setTxStatus("success");
       showToast("success", "Tạo chiến dịch thành công!");
-    } catch {
+      setCampaignName("");
+    } catch (error) {
+      const details = getErrorMessage(error);
       setTxStatus("error");
-      showToast("error", "Tạo chiến dịch thất bại. Thử lại.");
+      showToast(
+        "error",
+        details
+          ? `Tạo chiến dịch thất bại: ${details}`
+          : "Tạo chiến dịch thất bại. Thử lại.",
+      );
       return;
     }
 
@@ -403,6 +515,7 @@ export default function Home() {
       setSelectedCampaign({
         id,
         creator: campaign.creator,
+        name: campaign.name,
         goal: campaign.goal,
         pledged: campaign.pledged,
         deadline: campaign.deadline,
@@ -546,12 +659,6 @@ export default function Home() {
   const filteredCampaigns = useMemo(() => {
     const now = Date.now();
     const search = searchTerm.trim().toLowerCase();
-    const minGoal = minGoalEth ? Number(minGoalEth) : undefined;
-    const maxGoal = maxGoalEth ? Number(maxGoalEth) : undefined;
-    const minDays = minDaysLeft ? Number(minDaysLeft) : undefined;
-    const maxDays = maxDaysLeft ? Number(maxDaysLeft) : undefined;
-    const minRemain = minRemainingPct ? Number(minRemainingPct) : undefined;
-    const maxRemain = maxRemainingPct ? Number(maxRemainingPct) : undefined;
 
     const items = campaigns.map((campaign) => {
       const goalEth = Number(ethers.formatEther(campaign.goal));
@@ -577,76 +684,15 @@ export default function Home() {
 
     const filtered = items.filter((item) => {
       if (search) {
-        const idMatch = String(item.id).includes(search);
-        const creatorMatch = item.creator.toLowerCase().includes(search);
-        if (!idMatch && !creatorMatch) {
+        const nameMatch = item.name.toLowerCase().includes(search);
+        if (!nameMatch) {
           return false;
         }
       }
-
-      if (minGoal !== undefined && item.goalEth < minGoal) {
-        return false;
-      }
-      if (maxGoal !== undefined && item.goalEth > maxGoal) {
-        return false;
-      }
-      if (minDays !== undefined && item.daysLeft < minDays) {
-        return false;
-      }
-      if (maxDays !== undefined && item.daysLeft > maxDays) {
-        return false;
-      }
-      if (minRemain !== undefined && item.remainingPct < minRemain) {
-        return false;
-      }
-      if (maxRemain !== undefined && item.remainingPct > maxRemain) {
-        return false;
-      }
-
-      if (favoritesOnly && !favoriteIds.includes(item.id)) {
-        return false;
-      }
-
       return true;
     });
-
-    const dir = sortDir === "asc" ? 1 : -1;
-    filtered.sort((a, b) => {
-      let delta = 0;
-      if (sortBy === "goal") {
-        delta = a.goalEth - b.goalEth;
-      } else if (sortBy === "progress") {
-        delta = a.progress - b.progress;
-      } else if (sortBy === "remaining") {
-        delta = a.remainingPct - b.remainingPct;
-      } else if (sortBy === "deadline") {
-        delta = a.deadlineMs - b.deadlineMs;
-      } else if (sortBy === "daysLeft") {
-        delta = a.daysLeft - b.daysLeft;
-      }
-
-      if (delta === 0) {
-        return a.id - b.id;
-      }
-
-      return delta * dir;
-    });
-
     return filtered;
-  }, [
-    campaigns,
-    maxDaysLeft,
-    maxGoalEth,
-    maxRemainingPct,
-    minDaysLeft,
-    minGoalEth,
-    minRemainingPct,
-    favoriteIds,
-    favoritesOnly,
-    searchTerm,
-    sortBy,
-    sortDir,
-  ]);
+  }, [campaigns, searchTerm]);
 
   const totalPages = Math.max(
     1,
@@ -694,26 +740,6 @@ export default function Home() {
     };
   }, [campaigns]);
 
-  const activeFilterCount = useMemo(() => {
-    return [
-      searchTerm,
-      minGoalEth,
-      maxGoalEth,
-      minDaysLeft,
-      maxDaysLeft,
-      minRemainingPct,
-      maxRemainingPct,
-    ].filter((value) => value.trim() !== "").length;
-  }, [
-    maxDaysLeft,
-    maxGoalEth,
-    maxRemainingPct,
-    minDaysLeft,
-    minGoalEth,
-    minRemainingPct,
-    searchTerm,
-  ]);
-
   const topCampaign = useMemo(() => {
     if (campaigns.length === 0) {
       return null;
@@ -730,34 +756,9 @@ export default function Home() {
     return ranked[0];
   }, [campaigns]);
 
-  function resetFilters() {
-    setSearchTerm("");
-    setMinGoalEth("");
-    setMaxGoalEth("");
-    setMinDaysLeft("");
-    setMaxDaysLeft("");
-    setMinRemainingPct("");
-    setMaxRemainingPct("");
-    setSortBy("deadline");
-    setSortDir("asc");
-    setFavoritesOnly(false);
-    setCurrentPage(1);
-  }
-
   useEffect(() => {
     setCurrentPage(1);
-  }, [
-    searchTerm,
-    minGoalEth,
-    maxGoalEth,
-    minDaysLeft,
-    maxDaysLeft,
-    minRemainingPct,
-    maxRemainingPct,
-    sortBy,
-    sortDir,
-    favoritesOnly,
-  ]);
+  }, [searchTerm]);
 
   function toggleFavorite(id: number) {
     setFavoriteIds((prev) => {
@@ -782,11 +783,15 @@ export default function Home() {
             <div className="hero-brand">
               <div className="logo-mark">CF</div>
               <div>
-                <div className="eyebrow">Huy động vốn cộng đồng trực tiếp trên blockchain</div>
-                <span className="brand-badge">Được xác minh trên mạng Sepolia</span>
+                <div className="eyebrow">
+                  Huy động vốn cộng đồng trực tiếp trên blockchain
+                </div>
+                <span className="brand-badge">
+                  Được xác minh trên mạng Sepolia
+                </span>
               </div>
             </div>
-            <h1 className="title">Ứng dụng gọi vốn (DApp)</h1>
+            <h1 className="title">Ứng dụng góp vốn (DApp)</h1>
             <p className="subtitle">Tạo chiến dịch nhanh, gọi vốn minh bạch.</p>
             <div className="hero-actions">
               <button
@@ -813,7 +818,9 @@ export default function Home() {
                 Xem các chiến dịch
               </button>
               <span className="pill pill-ghost">
-                {account ? `Wallet: ${formatAddress(account)}` : "Bạn chưa kết nối ví"}
+                {account
+                  ? `Wallet: ${formatAddress(account)}`
+                  : "Bạn chưa kết nối ví"}
               </span>
             </div>
             {networkWarning && <div className="warning">{networkWarning}</div>}
@@ -867,11 +874,28 @@ export default function Home() {
               <p className="subtitle">Xác định mục tiêu và thời gian kêu gọi</p>
             </div>
             <div className="stack">
+              <label className="label">Tên chiến dịch</label>
+              <input
+                className="input"
+                value={campaignName}
+                onChange={(e) => setCampaignName(e.target.value)}
+                placeholder="Ví dụ: Quỹ học bổng 2026"
+              />
+              <div className="subtitle">
+                {account
+                  ? `Bạn đang có ${openCampaignCount}/5 chiến dịch đang mở.`
+                  : "Kết nối ví để kiểm tra số chiến dịch đang mở."}
+              </div>
               <label className="label">Mục tiêu huy động (ETH)</label>
               <input
                 className="input"
                 value={campaignGoalEth}
-                onChange={(e) => setCampaignGoalEth(e.target.value)}
+                onChange={(e) => {
+                  const next = normalizeEthInput(e.target.value, 6);
+                  if (next !== null) {
+                    setCampaignGoalEth(next);
+                  }
+                }}
                 placeholder="Mục tiêu (ETH)"
               />
               <label className="label">Thời gian kêu gọi (ngày)</label>
@@ -942,92 +966,14 @@ export default function Home() {
               </button>
             </div>
 
-            <div className={`filters ${showFilters ? "filters-open" : ""}`}>
-              <div className="filter-actions">
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => setShowFilters((prev) => !prev)}
-                >
-                  {showFilters ? "Đồng bộ" : "Xóa lọc"}
-                  {activeFilterCount > 0 && (
-                    <span className="filter-count">{activeFilterCount}</span>
-                  )}
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={resetFilters}>
-                  Đặt lại
-                </button>
-              </div>
+            <div className="filters">
               <div className="filter-grid">
                 <input
                   className="input input-compact"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Tìm theo ID hoặc người tạo"
+                  placeholder="Tìm theo tên chiến dịch"
                 />
-                <input
-                  className="input input-compact"
-                  value={minGoalEth}
-                  onChange={(e) => setMinGoalEth(e.target.value)}
-                  placeholder="Mục tiêu tối thiểu (ETH)"
-                />
-                <input
-                  className="input input-compact"
-                  value={maxGoalEth}
-                  onChange={(e) => setMaxGoalEth(e.target.value)}
-                  placeholder="Mục tiêu tối đa (ETH)"
-                />
-                <input
-                  className="input input-compact"
-                  value={minDaysLeft}
-                  onChange={(e) => setMinDaysLeft(e.target.value)}
-                  placeholder="Số ngày tối thiểu còn lại"
-                />
-                <input
-                  className="input input-compact"
-                  value={maxDaysLeft}
-                  onChange={(e) => setMaxDaysLeft(e.target.value)}
-                  placeholder="Số ngày tối đa còn lại"
-                />
-                <input
-                  className="input input-compact"
-                  value={minRemainingPct}
-                  onChange={(e) => setMinRemainingPct(e.target.value)}
-                  placeholder="Tỷ lệ tối thiểu còn lại (%)"
-                />
-                <input
-                  className="input input-compact"
-                  value={maxRemainingPct}
-                  onChange={(e) => setMaxRemainingPct(e.target.value)}
-                  placeholder="Tỷ lệ tối đa còn lại (%)"
-                />
-                <select
-                  className="input input-compact select"
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                >
-                  <option value="deadline">Sắp hết hạn</option>
-                  <option value="daysLeft">Thời hạn còn lại</option>
-                  <option value="goal">Mục tiêu</option>
-                  <option value="progress">% đã đạt</option>
-                  <option value="remaining">% còn lại</option>
-                </select>
-                <select
-                  className="input input-compact select"
-                  value={sortDir}
-                  onChange={(e) => setSortDir(e.target.value)}
-                >
-                  <option value="asc">Tăng dần</option>
-                  <option value="desc">Giảm dần</option>
-                </select>
-                <button
-                  className={`btn btn-ghost btn-sm ${
-                    favoritesOnly ? "btn-active" : ""
-                  }`}
-                  onClick={() => setFavoritesOnly((prev) => !prev)}
-                  type="button"
-                >
-                  Theo dõi
-                </button>
               </div>
             </div>
 
@@ -1063,9 +1009,11 @@ export default function Home() {
                       <div className="top-campaign">
                         <div className="top-campaign-head">
                           <div>
-                            <div className="section-title">Chiến dịch hàng đầu</div>
+                            <div className="section-title">
+                              Chiến dịch hàng đầu
+                            </div>
                             <p className="subtitle">
-                              Đang dẫn đầu với số vốn {" "}
+                              {topCampaign.name} · Đang dẫn đầu với số vốn{" "}
                               {topCampaign.pledgedEth.toFixed(3)} ETH
                             </p>
                           </div>
@@ -1120,11 +1068,41 @@ export default function Home() {
                       campaign.deadlineMs <= Date.now();
                     const canPledge =
                       !campaign.claimed && campaign.deadlineMs > Date.now();
+                    const isExpired =
+                      !campaign.claimed &&
+                      campaign.pledged < campaign.goal &&
+                      campaign.deadlineMs <= Date.now();
+                    const isRefunded = refundedCampaignIds.includes(
+                      campaign.id,
+                    );
+                    const statusText = campaign.claimed
+                      ? "Đã nhận vốn"
+                      : isExpired
+                        ? isRefunded
+                          ? "Đã hoàn tiền"
+                          : "Đã hết hạn"
+                        : "Đang mở";
+                    const statusClass = campaign.claimed
+                      ? "badge-muted"
+                      : isExpired
+                        ? isRefunded
+                          ? "badge-refunded"
+                          : "badge-muted"
+                        : "badge-live";
+                    const statusDotClass = campaign.claimed
+                      ? "status-dot-muted"
+                      : isExpired
+                        ? isRefunded
+                          ? "status-dot-refunded"
+                          : "status-dot-muted"
+                        : "status-dot-live";
                     let pledgeHint = "";
                     if (campaign.claimed) {
-                      pledgeHint = "Chiến dịch đã kết thúc nhận vốn, bạn không thể góp thêm.";
+                      pledgeHint =
+                        "Chiến dịch đã kết thúc nhận vốn, bạn không thể góp thêm.";
                     } else if (campaign.deadlineMs <= Date.now()) {
-                      pledgeHint = "Chiến dịch đã hết hạn. Không thể đóng góp thêm.";
+                      pledgeHint =
+                        "Chiến dịch đã hết hạn. Không thể đóng góp thêm.";
                     }
                     let actionHint = "";
                     if (!canClaim && !canRefund) {
@@ -1134,7 +1112,8 @@ export default function Home() {
                       ) {
                         actionHint = "Chỉ chủ chiến dịch được phép rút tiền.";
                       } else if (campaign.pledged < campaign.goal) {
-                        actionHint = "Bạn chưa đạt điều kiện để nhận hoặc hoàn vốn.";
+                        actionHint =
+                          "Bạn chưa đạt điều kiện để nhận hoặc hoàn vốn.";
                       }
                     }
 
@@ -1153,22 +1132,12 @@ export default function Home() {
                               {campaign.contributed && (
                                 <span className="badge badge-you">Bạn</span>
                               )}
-                              <span
-                                className={`badge ${
-                                  campaign.claimed
-                                    ? "badge-muted"
-                                    : "badge-live"
-                                }`}
-                              >
+                              <span className={`badge ${statusClass}`}>
                                 <span
-                                  className={`status-dot ${
-                                    campaign.claimed
-                                      ? "status-dot-muted"
-                                      : "status-dot-live"
-                                  }`}
+                                  className={`status-dot ${statusDotClass}`}
                                   aria-hidden
                                 />
-                                {campaign.claimed ? "Đã nhận vốn" : "Đang mở"}
+                                {statusText}
                               </span>
                             </div>
                           </div>
@@ -1179,6 +1148,7 @@ export default function Home() {
                             </span>
                           </div>
                         </div>
+                        <div className="campaign-title">{campaign.name}</div>
                         <div className="campaign-kpis">
                           <div className="kpi">
                             <div className="kpi-label">
@@ -1243,10 +1213,19 @@ export default function Home() {
                             className="input input-compact"
                             value={pledgeAmounts[campaign.id] ?? ""}
                             onChange={(e) =>
-                              setPledgeAmounts((prev) => ({
-                                ...prev,
-                                [campaign.id]: e.target.value,
-                              }))
+                              setPledgeAmounts((prev) => {
+                                const next = normalizeEthInput(
+                                  e.target.value,
+                                  6,
+                                );
+                                if (next === null) {
+                                  return prev;
+                                }
+                                return {
+                                  ...prev,
+                                  [campaign.id]: next,
+                                };
+                              })
                             }
                             placeholder="Số ETH"
                             disabled={!canPledge}
@@ -1299,8 +1278,8 @@ export default function Home() {
                             onClick={() => toggleFavorite(campaign.id)}
                           >
                             {favoriteIds.includes(campaign.id)
-                              ? "Đã lưu"
-                              : "Lưu"}
+                              ? "Đã theo dõi"
+                              : "Theo dõi"}
                           </button>
                         </div>
                         {(pledgeHint || actionHint) && (
@@ -1361,6 +1340,10 @@ export default function Home() {
             ) : (
               <div className="detail-grid">
                 <div className="detail-wide">
+                  <div className="label">Tên chiến dịch</div>
+                  <div className="value">{selectedCampaign.name}</div>
+                </div>
+                <div className="detail-wide">
                   <div className="label">Người tạo</div>
                   <div className="value detail-value-wrap">
                     {formatAddress(selectedCampaign.creator)}
@@ -1395,7 +1378,21 @@ export default function Home() {
                 <div>
                   <div className="label">Trạng thái</div>
                   <div className="value">
-                    {selectedCampaign.claimed ? "Đã rút tiền" : "Đang mở"}
+                    {(() => {
+                      const isExpired =
+                        !selectedCampaign.claimed &&
+                        selectedCampaign.pledged < selectedCampaign.goal &&
+                        Number(selectedCampaign.deadline) * 1000 <= Date.now();
+                      if (selectedCampaign.claimed) {
+                        return "Đã rút tiền";
+                      }
+                      if (isExpired) {
+                        return refundedCampaignIds.includes(selectedCampaign.id)
+                          ? "Đã hoàn tiền"
+                          : "Đã hết hạn";
+                      }
+                      return "Đang mở";
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1452,7 +1449,7 @@ export default function Home() {
 
             <div className="detail-tabs">
               {[
-                { key: "contributors", label: "Người đóng góp" },
+                { key: "contributors", label: "Đóng góp nổi bật" },
                 { key: "pledges", label: "Lịch sử góp" },
                 { key: "claims", label: "Lịch sử rút vốn" },
                 { key: "refunds", label: "Lịch sử hoàn vốn" },

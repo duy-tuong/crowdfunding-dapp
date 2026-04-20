@@ -524,6 +524,13 @@ body {
   background: rgba(15, 139, 141, 0.08);
 }
 
+.campaign-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
 .badges {
   display: inline-flex;
   gap: 6px;
@@ -633,6 +640,10 @@ body {
   box-shadow: 0 0 0 3px rgba(91, 100, 114, 0.18);
 }
 
+.status-dot-refunded {
+  box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.18);
+}
+
 .badge-live {
   background: rgba(15, 139, 141, 0.12);
   color: var(--accent);
@@ -643,6 +654,12 @@ body {
   background: rgba(91, 100, 114, 0.12);
   color: var(--muted);
   border-color: rgba(91, 100, 114, 0.2);
+}
+
+.badge-refunded {
+  background: rgba(14, 116, 144, 0.12);
+  color: #0e7490;
+  border-color: rgba(14, 116, 144, 0.28);
 }
 
 .badge-you {

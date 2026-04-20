@@ -5,6 +5,7 @@ contract Crowdfunding {
 
     struct Campaign {
         address creator;
+        string name;
         uint goal;
         uint pledged;
         uint deadline;
@@ -16,9 +17,21 @@ contract Crowdfunding {
     mapping(uint => Campaign) public campaigns;
     mapping(uint => mapping(address => uint)) public pledgedAmount;
 
+    function openCampaignCount(address creator) public view returns (uint) {
+        uint total = 0;
+        for (uint i = 1; i <= count; i++) {
+            Campaign storage c = campaigns[i];
+            if (c.creator == creator && !c.claimed && block.timestamp < c.deadline) {
+                total++;
+            }
+        }
+        return total;
+    }
+
     event CampaignCreated(
         uint indexed id,
         address indexed creator,
+        string name,
         uint goal,
         uint duration,
         uint deadline
@@ -41,18 +54,21 @@ contract Crowdfunding {
     );
 
     // 🟢 Tạo campaign
-    function createCampaign(uint _goal, uint _duration) public {
+    function createCampaign(string calldata _name, uint _goal, uint _duration) public {
+        require(bytes(_name).length > 0 && bytes(_name).length <= 32, "Invalid name");
+        require(openCampaignCount(msg.sender) < 5, "Too many active campaigns");
         count++;
         uint deadline = block.timestamp + _duration;
         campaigns[count] = Campaign({
             creator: msg.sender,
+            name: _name,
             goal: _goal,
             pledged: 0,
             deadline: deadline,
             claimed: false
         });
 
-        emit CampaignCreated(count, msg.sender, _goal, _duration, deadline);
+        emit CampaignCreated(count, msg.sender, _name, _goal, _duration, deadline);
     }
 
     // 💰 Góp vốn

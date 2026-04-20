@@ -1,4 +1,4 @@
-export const contractAddress = "0x849D35d722Bb56ceBc4a95FbDb542ff2E3B9481D";
+export const contractAddress = "0xc4073433674FAaA065E70388715Ac8643aD812B1";
 
 export const abi = [
   {
@@ -15,6 +15,12 @@ export const abi = [
         internalType: "address",
         name: "creator",
         type: "address",
+      },
+      {
+        indexed: false,
+        internalType: "string",
+        name: "name",
+        type: "string",
       },
       {
         indexed: false,
@@ -135,6 +141,11 @@ export const abi = [
         type: "address",
       },
       {
+        internalType: "string",
+        name: "name",
+        type: "string",
+      },
+      {
         internalType: "uint256",
         name: "goal",
         type: "uint256",
@@ -187,6 +198,11 @@ export const abi = [
   {
     inputs: [
       {
+        internalType: "string",
+        name: "_name",
+        type: "string",
+      },
+      {
         internalType: "uint256",
         name: "_goal",
         type: "uint256",
@@ -213,6 +229,25 @@ export const abi = [
     name: "pledge",
     outputs: [],
     stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "address",
+        name: "creator",
+        type: "address",
+      },
+    ],
+    name: "openCampaignCount",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
     type: "function",
   },
   {

@@ -16,6 +16,7 @@ contract Crowdfunding {
 
     mapping(uint => Campaign) public campaigns;
     mapping(uint => mapping(address => uint)) public pledgedAmount;
+    mapping(address => string) public userNames;
 
     function openCampaignCount(address creator) public view returns (uint) {
         uint total = 0;
@@ -52,6 +53,7 @@ contract Crowdfunding {
         address indexed contributor,
         uint amount
     );
+    event UserNameUpdated(address indexed user, string name);
 
     // 🟢 Tạo campaign
     function createCampaign(string calldata _name, uint _goal, uint _duration) public {
@@ -69,6 +71,12 @@ contract Crowdfunding {
         });
 
         emit CampaignCreated(count, msg.sender, _name, _goal, _duration, deadline);
+    }
+
+    function setUserName(string calldata _name) public {
+        require(bytes(_name).length > 0 && bytes(_name).length <= 32, "Invalid name");
+        userNames[msg.sender] = _name;
+        emit UserNameUpdated(msg.sender, _name);
     }
 
     // 💰 Góp vốn

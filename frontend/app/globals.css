@@ -617,6 +617,52 @@ body {
   font-weight: 600;
 }
 
+.address-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.address-actions {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--accent-3);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    border 120ms ease;
+}
+
+.icon-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(29, 78, 216, 0.35);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+}
+
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .badge {
   padding: 6px 10px;
   border-radius: 999px;
@@ -644,6 +690,10 @@ body {
   box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.18);
 }
 
+.status-dot-urgent {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+}
+
 .badge-live {
   background: rgba(15, 139, 141, 0.12);
   color: var(--accent);
@@ -660,6 +710,12 @@ body {
   background: rgba(14, 116, 144, 0.12);
   color: #0e7490;
   border-color: rgba(14, 116, 144, 0.28);
+}
+
+.badge-urgent {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.28);
 }
 
 .badge-you {

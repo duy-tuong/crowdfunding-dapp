@@ -9,6 +9,9 @@ export default function Home() {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const SEPOLIA_CHAIN_ID = BigInt(11155111);
   const [account, setAccount] = useState("");
+  const [userNameInput, setUserNameInput] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("");
+  const [isEditingUserName, setIsEditingUserName] = useState(false);
   const [campaignName, setCampaignName] = useState("");
   const [campaignGoalEth, setCampaignGoalEth] = useState("0.1");
   const [campaignDurationDays, setCampaignDurationDays] = useState("7");
@@ -67,6 +70,7 @@ export default function Home() {
   >([]);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [activeDetailTab, setActiveDetailTab] = useState("contributors");
   const [favoriteIds, setFavoriteIds] = useState<number[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -88,7 +92,11 @@ export default function Home() {
   >([]);
   const [openCampaignCount, setOpenCampaignCount] = useState(0);
   const [refundedCampaignIds, setRefundedCampaignIds] = useState<number[]>([]);
+  const [userNamesByAddress, setUserNamesByAddress] = useState<
+    Record<string, string>
+  >({});
   const explorerBase = "https://sepolia.etherscan.io/tx/";
+  const explorerAddressBase = "https://sepolia.etherscan.io/address/";
 
   const showToast = useCallback(
     (type: "info" | "success" | "error", message: string) => {
@@ -153,6 +161,18 @@ export default function Home() {
     return `${address.slice(0, head)}...${address.slice(-tail)}`;
   }
 
+  function getAddressKey(address: string) {
+    return address.toLowerCase();
+  }
+
+  function displayName(address: string) {
+    const name = userNamesByAddress[getAddressKey(address)];
+    if (name && name.trim()) {
+      return name;
+    }
+    return formatAddress(address);
+  }
+
   function normalizeEthInput(value: string, maxDecimals: number) {
     if (value === "") {
       return value;
@@ -190,6 +210,44 @@ export default function Home() {
     }
     return "";
   }
+
+  async function copyToClipboard(text: string, label: string) {
+    if (!navigator.clipboard) {
+      showToast("error", "Trình duyệt không hỗ trợ copy.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("success", `Đã copy ${label}.`);
+    } catch {
+      showToast("error", "Không thể copy. Thử lại.");
+    }
+  }
+
+  const loadUserNames = useCallback(
+    async (contract: ethers.Contract, addresses: string[]) => {
+      const unique = Array.from(
+        new Set(addresses.filter(Boolean).map((addr) => getAddressKey(addr))),
+      );
+      if (unique.length === 0) {
+        return;
+      }
+      const results = await Promise.all(
+        unique.map(async (addr) => {
+          const name = await contract.userNames(addr);
+          return { addr, name: typeof name === "string" ? name : "" };
+        }),
+      );
+      setUserNamesByAddress((prev) => {
+        const next = { ...prev };
+        for (const item of results) {
+          next[item.addr] = item.name;
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   // 🔗 connect ví
   async function connectWallet() {
@@ -248,6 +306,14 @@ export default function Home() {
         if (account) {
           const openCount = await contract.openCampaignCount(account);
           setOpenCampaignCount(Number(openCount));
+          const storedName = await contract.userNames(account);
+          setCurrentUserName(storedName ?? "");
+          setUserNameInput(storedName ?? "");
+          setIsEditingUserName(!storedName);
+          await loadUserNames(contract, [
+            account,
+            ...items.map((item) => item.creator),
+          ]);
           const refundedFilter = contract.filters.Refunded(null, account);
           const refundedLogs = await contract.queryFilter(
             refundedFilter,
@@ -268,12 +334,16 @@ export default function Home() {
         } else {
           setOpenCampaignCount(0);
           setRefundedCampaignIds([]);
+          setCurrentUserName("");
+          setUserNameInput("");
+          setUserNamesByAddress({});
+          setIsEditingUserName(false);
         }
       } finally {
         setIsLoadingCampaigns(false);
       }
     },
-    [account, getProvider],
+    [account, getProvider, loadUserNames],
   );
 
   // 💰 góp vốn
@@ -498,104 +568,159 @@ export default function Home() {
     await loadCampaigns(wallet.ethereum);
   }
 
-  async function loadCampaignDetail(
-    id: number,
-    ethereum?: typeof window.ethereum,
-  ) {
-    const providerSource = ethereum ?? window.ethereum;
-    if (!providerSource) {
+  async function saveUserName() {
+    const trimmedName = userNameInput.trim();
+    if (!trimmedName || trimmedName.length > 32) {
+      showToast("error", "Tên người dùng phải từ 1 đến 32 ký tự.");
       return;
     }
 
-    setIsLoadingDetail(true);
+    const wallet = await getProvider(true);
+    if (!wallet) {
+      return;
+    }
+
+    const signer = await wallet.provider.getSigner();
+    const contract = new ethers.Contract(contractAddress, abi, signer);
+
     try {
-      const provider = new ethers.BrowserProvider(providerSource);
-      const contract = new ethers.Contract(contractAddress, abi, provider);
-      const campaign = await contract.campaigns(id);
-      setSelectedCampaign({
-        id,
-        creator: campaign.creator,
-        name: campaign.name,
-        goal: campaign.goal,
-        pledged: campaign.pledged,
-        deadline: campaign.deadline,
-        claimed: campaign.claimed,
-      });
-
-      const filter = contract.filters.Pledged(id);
-      const logs = await contract.queryFilter(filter, 0, "latest");
-      const mapped = logs.map((log) => {
-        const parsed = contract.interface.parseLog(log);
-        if (!parsed) {
-          return null;
-        }
-        const args = parsed.args as unknown as {
-          contributor: string;
-          amount: bigint;
-          totalPledged: bigint;
-        };
-        return {
-          contributor: args.contributor,
-          amount: args.amount,
-          totalPledged: args.totalPledged,
-          blockNumber: log.blockNumber,
-          txHash: log.transactionHash,
-        };
-      });
-      const history = mapped.filter(
-        (item): item is NonNullable<typeof item> => item !== null,
+      setTxStatus("pending");
+      showToast("info", "Đang lưu tên người dùng...");
+      const tx = await contract.setUserName(trimmedName);
+      trackTx(tx.hash, "Cập nhật tên");
+      await tx.wait();
+      updateTx(tx.hash, "success");
+      setTxStatus("success");
+      showToast("success", "Cập nhật tên thành công!");
+      setCurrentUserName(trimmedName);
+      setIsEditingUserName(false);
+      if (account) {
+        setUserNamesByAddress((prev) => ({
+          ...prev,
+          [getAddressKey(account)]: trimmedName,
+        }));
+      }
+    } catch (error) {
+      const details = getErrorMessage(error);
+      setTxStatus("error");
+      showToast(
+        "error",
+        details
+          ? `Cập nhật tên thất bại: ${details}`
+          : "Cập nhật tên thất bại. Thử lại.",
       );
-      setPledgeHistory(history.reverse());
-
-      const claimFilter = contract.filters.Claimed(id);
-      const claimLogs = await contract.queryFilter(claimFilter, 0, "latest");
-      const claimMapped = claimLogs.map((log) => {
-        const parsed = contract.interface.parseLog(log);
-        if (!parsed) {
-          return null;
-        }
-        const args = parsed.args as unknown as {
-          creator: string;
-          amount: bigint;
-        };
-        return {
-          creator: args.creator,
-          amount: args.amount,
-          blockNumber: log.blockNumber,
-          txHash: log.transactionHash,
-        };
-      });
-      const claims = claimMapped.filter(
-        (item): item is NonNullable<typeof item> => item !== null,
-      );
-      setClaimHistory(claims.reverse());
-
-      const refundFilter = contract.filters.Refunded(id);
-      const refundLogs = await contract.queryFilter(refundFilter, 0, "latest");
-      const refundMapped = refundLogs.map((log) => {
-        const parsed = contract.interface.parseLog(log);
-        if (!parsed) {
-          return null;
-        }
-        const args = parsed.args as unknown as {
-          contributor: string;
-          amount: bigint;
-        };
-        return {
-          contributor: args.contributor,
-          amount: args.amount,
-          blockNumber: log.blockNumber,
-          txHash: log.transactionHash,
-        };
-      });
-      const refunds = refundMapped.filter(
-        (item): item is NonNullable<typeof item> => item !== null,
-      );
-      setRefundHistory(refunds.reverse());
-    } finally {
-      setIsLoadingDetail(false);
     }
   }
+
+  const loadCampaignDetail = useCallback(
+    async (id: number, ethereum?: typeof window.ethereum) => {
+      const providerSource = ethereum ?? window.ethereum;
+      if (!providerSource) {
+        return;
+      }
+
+      setIsLoadingDetail(true);
+      try {
+        const provider = new ethers.BrowserProvider(providerSource);
+        const contract = new ethers.Contract(contractAddress, abi, provider);
+        const campaign = await contract.campaigns(id);
+        setSelectedCampaign({
+          id,
+          creator: campaign.creator,
+          name: campaign.name,
+          goal: campaign.goal,
+          pledged: campaign.pledged,
+          deadline: campaign.deadline,
+          claimed: campaign.claimed,
+        });
+
+        const filter = contract.filters.Pledged(id);
+        const logs = await contract.queryFilter(filter, 0, "latest");
+        const mapped = logs.map((log) => {
+          const parsed = contract.interface.parseLog(log);
+          if (!parsed) {
+            return null;
+          }
+          const args = parsed.args as unknown as {
+            contributor: string;
+            amount: bigint;
+            totalPledged: bigint;
+          };
+          return {
+            contributor: args.contributor,
+            amount: args.amount,
+            totalPledged: args.totalPledged,
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+          };
+        });
+        const history = mapped.filter(
+          (item): item is NonNullable<typeof item> => item !== null,
+        );
+        setPledgeHistory(history.reverse());
+
+        const claimFilter = contract.filters.Claimed(id);
+        const claimLogs = await contract.queryFilter(claimFilter, 0, "latest");
+        const claimMapped = claimLogs.map((log) => {
+          const parsed = contract.interface.parseLog(log);
+          if (!parsed) {
+            return null;
+          }
+          const args = parsed.args as unknown as {
+            creator: string;
+            amount: bigint;
+          };
+          return {
+            creator: args.creator,
+            amount: args.amount,
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+          };
+        });
+        const claims = claimMapped.filter(
+          (item): item is NonNullable<typeof item> => item !== null,
+        );
+        setClaimHistory(claims.reverse());
+
+        const refundFilter = contract.filters.Refunded(id);
+        const refundLogs = await contract.queryFilter(
+          refundFilter,
+          0,
+          "latest",
+        );
+        const refundMapped = refundLogs.map((log) => {
+          const parsed = contract.interface.parseLog(log);
+          if (!parsed) {
+            return null;
+          }
+          const args = parsed.args as unknown as {
+            contributor: string;
+            amount: bigint;
+          };
+          return {
+            contributor: args.contributor,
+            amount: args.amount,
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+          };
+        });
+        const refunds = refundMapped.filter(
+          (item): item is NonNullable<typeof item> => item !== null,
+        );
+        setRefundHistory(refunds.reverse());
+
+        await loadUserNames(contract, [
+          campaign.creator,
+          ...history.map((item) => item.contributor),
+          ...claims.map((item) => item.creator),
+          ...refunds.map((item) => item.contributor),
+        ]);
+      } finally {
+        setIsLoadingDetail(false);
+      }
+    },
+    [loadUserNames],
+  );
 
   useEffect(() => {
     if (window.ethereum) {
@@ -642,7 +767,7 @@ export default function Home() {
       contract.removeAllListeners("Claimed");
       contract.removeAllListeners("Refunded");
     };
-  }, [loadCampaigns, selectedCampaignId]);
+  }, [loadCampaignDetail, loadCampaigns, selectedCampaignId]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("crowdfunding:favorites");
@@ -689,10 +814,13 @@ export default function Home() {
           return false;
         }
       }
+      if (favoritesOnly && !favoriteIds.includes(item.id)) {
+        return false;
+      }
       return true;
     });
     return filtered;
-  }, [campaigns, searchTerm]);
+  }, [campaigns, favoriteIds, favoritesOnly, searchTerm]);
 
   const totalPages = Math.max(
     1,
@@ -758,7 +886,7 @@ export default function Home() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [favoritesOnly, searchTerm]);
 
   function toggleFavorite(id: number) {
     setFavoriteIds((prev) => {
@@ -819,9 +947,60 @@ export default function Home() {
               </button>
               <span className="pill pill-ghost">
                 {account
-                  ? `Wallet: ${formatAddress(account)}`
+                  ? `Wallet: ${displayName(account)}`
                   : "Bạn chưa kết nối ví"}
               </span>
+            </div>
+            <div className="stack">
+              <label className="label">Tên người dùng</label>
+              {currentUserName && !isEditingUserName ? (
+                <>
+                  <div className="subtitle">
+                    Tên hiện tại: {currentUserName}
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setIsEditingUserName(true)}
+                    type="button"
+                  >
+                    Đổi tên
+                  </button>
+                </>
+              ) : (
+                <>
+                  {account && !currentUserName && (
+                    <div className="subtitle">Vui lòng đặt tên hiển thị.</div>
+                  )}
+                  <input
+                    className="input"
+                    value={userNameInput}
+                    onChange={(e) => setUserNameInput(e.target.value)}
+                    placeholder="Nhập tên hiển thị"
+                  />
+                  <div className="row">
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={saveUserName}
+                      disabled={txStatus === "pending"}
+                      type="button"
+                    >
+                      Lưu tên người dùng
+                    </button>
+                    {currentUserName && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          setUserNameInput(currentUserName);
+                          setIsEditingUserName(false);
+                        }}
+                        type="button"
+                      >
+                        Hủy
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
             {networkWarning && <div className="warning">{networkWarning}</div>}
           </div>
@@ -974,6 +1153,17 @@ export default function Home() {
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="Tìm theo tên chiến dịch"
                 />
+                <button
+                  className={`btn btn-ghost btn-sm ${
+                    favoritesOnly ? "btn-active" : ""
+                  }`}
+                  onClick={() => setFavoritesOnly((prev) => !prev)}
+                  type="button"
+                >
+                  {favoritesOnly
+                    ? `Đang lọc đã theo dõi (${favoriteIds.length})`
+                    : `Lọc đã theo dõi (${favoriteIds.length})`}
+                </button>
               </div>
             </div>
 
@@ -986,9 +1176,17 @@ export default function Home() {
             ) : filteredCampaigns.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-orb" />
-                <h4>Chưa có chiến dịch nào</h4>
+                <h4>
+                  {favoritesOnly
+                    ? "Chưa có chiến dịch đã theo dõi"
+                    : "Chưa có chiến dịch nào"}
+                </h4>
                 <p className="subtitle">
-                  Tạo chiến dịch đầu tiên để bắt đầu huy động vốn.
+                  {favoritesOnly
+                    ? favoriteIds.length === 0
+                      ? "Hãy bấm Theo dõi ở một chiến dịch để lưu lại."
+                      : "Không tìm thấy chiến dịch đã theo dõi theo bộ lọc hiện tại."
+                    : "Tạo chiến dịch đầu tiên để bắt đầu huy động vốn."}
                 </p>
               </div>
             ) : (
@@ -1068,6 +1266,10 @@ export default function Home() {
                       campaign.deadlineMs <= Date.now();
                     const canPledge =
                       !campaign.claimed && campaign.deadlineMs > Date.now();
+                    const isUrgent =
+                      !campaign.claimed &&
+                      campaign.deadlineMs > Date.now() &&
+                      campaign.daysLeft <= 1;
                     const isExpired =
                       !campaign.claimed &&
                       campaign.pledged < campaign.goal &&
@@ -1132,6 +1334,15 @@ export default function Home() {
                               {campaign.contributed && (
                                 <span className="badge badge-you">Bạn</span>
                               )}
+                              {isUrgent && (
+                                <span className="badge badge-urgent">
+                                  <span
+                                    className="status-dot status-dot-urgent"
+                                    aria-hidden
+                                  />
+                                  Sắp hết hạn
+                                </span>
+                              )}
                               <span className={`badge ${statusClass}`}>
                                 <span
                                   className={`status-dot ${statusDotClass}`}
@@ -1144,7 +1355,7 @@ export default function Home() {
                           <div className="campaign-creator">
                             <span className="label">Creator</span>
                             <span className="pill pill-ghost">
-                              {formatAddress(campaign.creator)}
+                              {displayName(campaign.creator)}
                             </span>
                           </div>
                         </div>
@@ -1345,8 +1556,40 @@ export default function Home() {
                 </div>
                 <div className="detail-wide">
                   <div className="label">Người tạo</div>
-                  <div className="value detail-value-wrap">
-                    {formatAddress(selectedCampaign.creator)}
+                  <div className="address-row">
+                    <span className="value detail-value-wrap">
+                      {displayName(selectedCampaign.creator)}
+                    </span>
+                    <div className="address-actions">
+                      <button
+                        className="icon-button"
+                        type="button"
+                        onClick={() =>
+                          copyToClipboard(selectedCampaign.creator, "dia chi")
+                        }
+                        aria-label="Copy dia chi"
+                        title="Copy dia chi"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden>
+                          <rect x="9" y="9" width="10" height="10" />
+                          <rect x="5" y="5" width="10" height="10" />
+                        </svg>
+                      </button>
+                      <a
+                        className="icon-button"
+                        href={`${explorerAddressBase}${selectedCampaign.creator}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label="Mở Etherscan"
+                        title="Mở Etherscan"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden>
+                          <path d="M14 5h5v5" />
+                          <path d="M10 14l9-9" />
+                          <path d="M5 7v12h12" />
+                        </svg>
+                      </a>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -1475,9 +1718,41 @@ export default function Home() {
                   <div className="contributors">
                     {topContributors.map((item) => (
                       <div className="contributor" key={item.contributor}>
-                        <span className="pill">
-                          {formatAddress(item.contributor)}
-                        </span>
+                        <div className="address-row">
+                          <span className="pill">
+                            {displayName(item.contributor)}
+                          </span>
+                          <div className="address-actions">
+                            <button
+                              className="icon-button"
+                              type="button"
+                              onClick={() =>
+                                copyToClipboard(item.contributor, "địa chỉ")
+                              }
+                              aria-label="Copy địa chỉ"
+                              title="Copy địa chỉ"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden>
+                                <rect x="9" y="9" width="10" height="10" />
+                                <rect x="5" y="5" width="10" height="10" />
+                              </svg>
+                            </button>
+                            <a
+                              className="icon-button"
+                              href={`${explorerAddressBase}${item.contributor}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label="Mở Etherscan"
+                              title="Mở Etherscan"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden>
+                                <path d="M14 5h5v5" />
+                                <path d="M10 14l9-9" />
+                                <path d="M5 7v12h12" />
+                              </svg>
+                            </a>
+                          </div>
+                        </div>
                         <span className="value">
                           {Number(ethers.formatEther(item.amount)).toFixed(4)}{" "}
                           ETH
@@ -1491,7 +1766,7 @@ export default function Home() {
 
             {activeDetailTab === "claims" && (
               <div className="detail-section">
-                <h4>Lịch sử đóng góp</h4>
+                <h4>Lịch sử rút vốn</h4>
                 {claimHistory.length === 0 ? (
                   <p className="subtitle">Chưa có đóng góp nào</p>
                 ) : (
@@ -1503,8 +1778,40 @@ export default function Home() {
                       >
                         <div>
                           <div className="label">Người tạo</div>
-                          <div className="value">
-                            {formatAddress(item.creator)}
+                          <div className="address-row">
+                            <span className="value">
+                              {displayName(item.creator)}
+                            </span>
+                            <div className="address-actions">
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() =>
+                                  copyToClipboard(item.creator, "địa chỉ")
+                                }
+                                aria-label="Copy địa chỉ"
+                                title="Copy địa chỉ"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <rect x="9" y="9" width="10" height="10" />
+                                  <rect x="5" y="5" width="10" height="10" />
+                                </svg>
+                              </button>
+                              <a
+                                className="icon-button"
+                                href={`${explorerAddressBase}${item.creator}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label="Mở Etherscan"
+                                title="Mở Etherscan"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <path d="M14 5h5v5" />
+                                  <path d="M10 14l9-9" />
+                                  <path d="M5 7v12h12" />
+                                </svg>
+                              </a>
+                            </div>
                           </div>
                         </div>
                         <div>
@@ -1539,8 +1846,40 @@ export default function Home() {
                       >
                         <div>
                           <div className="label">Người đóng góp</div>
-                          <div className="value">
-                            {formatAddress(item.contributor)}
+                          <div className="address-row">
+                            <span className="value">
+                              {displayName(item.contributor)}
+                            </span>
+                            <div className="address-actions">
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() =>
+                                  copyToClipboard(item.contributor, "địa chỉ")
+                                }
+                                aria-label="Copy địa chỉ"
+                                title="Copy địa chỉ"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <rect x="9" y="9" width="10" height="10" />
+                                  <rect x="5" y="5" width="10" height="10" />
+                                </svg>
+                              </button>
+                              <a
+                                className="icon-button"
+                                href={`${explorerAddressBase}${item.contributor}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label="Mở Etherscan"
+                                title="Mở Etherscan"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <path d="M14 5h5v5" />
+                                  <path d="M10 14l9-9" />
+                                  <path d="M5 7v12h12" />
+                                </svg>
+                              </a>
+                            </div>
                           </div>
                         </div>
                         <div>
@@ -1575,8 +1914,40 @@ export default function Home() {
                       >
                         <div>
                           <div className="label">Người đóng góp</div>
-                          <div className="value">
-                            {formatAddress(item.contributor)}
+                          <div className="address-row">
+                            <span className="value">
+                              {displayName(item.contributor)}
+                            </span>
+                            <div className="address-actions">
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() =>
+                                  copyToClipboard(item.contributor, "địa chỉ")
+                                }
+                                aria-label="Copy địa chỉ"
+                                title="Copy địa chỉ"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <rect x="9" y="9" width="10" height="10" />
+                                  <rect x="5" y="5" width="10" height="10" />
+                                </svg>
+                              </button>
+                              <a
+                                className="icon-button"
+                                href={`${explorerAddressBase}${item.contributor}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                aria-label="Mở Etherscan"
+                                title="Mở Etherscan"
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden>
+                                  <path d="M14 5h5v5" />
+                                  <path d="M10 14l9-9" />
+                                  <path d="M5 7v12h12" />
+                                </svg>
+                              </a>
+                            </div>
                           </div>
                         </div>
                         <div>

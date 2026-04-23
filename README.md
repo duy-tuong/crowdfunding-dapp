@@ -1,7 +1,7 @@
 # Crowdfunding DApp (Sepolia)
 
 Ứng dụng gọi vốn cộng đồng on-chain với giao diện hiện đại, hiển thị lịch sử giao dịch, trạng thái chiến dịch, và tên người dùng lưu vĩnh viễn trên blockchain.
-
+Link deploy web trên vercel: https://crowdfunding-dapp-indol.vercel.app/
 ## Tính năng chính
 
 - Tạo chiến dịch với tên, mục tiêu và thời gian kêu gọi.
